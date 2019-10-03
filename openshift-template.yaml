@@ -1,0 +1,159 @@
+kind: Template
+metadata: {}
+apiVersion: v1
+objects:
+- apiVersion: v1
+  data:
+    htpasswd: ''
+  kind: Secret
+  metadata:
+    name: jaeger-collector-proxy-auth
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: jaeger-collector-proxy
+      template: jaeger-collector-proxy
+    name: jaeger-collector-proxy
+  spec:
+    ports:
+    - name: web
+      port: 8080
+      targetPort: 8080
+    selector:
+      name: jaeger-collector-proxy
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    annotations:
+      template.openshift.io/expose-uri: http://{.spec.host}{.spec.path}
+    labels:
+      app: jaeger-collector-proxy
+      template: jaeger-collector-proxy
+    name: jaeger-collector-proxy
+  spec:
+    path: /api/traces
+    to:
+      kind: Service
+      name: jaeger-collector-proxy
+    tls:
+      termination: edge
+      insecureEdgeTerminationPolicy: Redirect      
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    labels:
+      app: jaeger-collector-proxy
+      template: jaeger-collector-proxy
+    name: jaeger-collector-proxy
+  spec:
+    lookupPolicy:
+      local: false
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      template.alpha.openshift.io/wait-for-ready: "true"
+    labels:
+      app: jaeger-collector-proxy
+      template: jaeger-collector-proxy
+    name: jaeger-collector-proxy
+  spec:
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: jaeger-collector-proxy:latest
+    source:
+      git:
+        uri: https://github.com/OutThereLabs/jaeger-collector-proxy.git
+      type: Git
+    strategy:
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: nginx:1.12
+          namespace: openshift
+      type: Source
+    triggers:
+    - type: ImageChange
+    - type: ConfigChange
+    - github:
+        secret: ${GITHUB_WEBHOOK_SECRET}
+      type: GitHub
+    - generic:
+        secret: ${GENERIC_WEBHOOK_SECRET}
+      type: Generic
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      template.alpha.openshift.io/wait-for-ready: "true"
+    labels:
+      app: jaeger-collector-proxy
+      template: jaeger-collector-proxy
+    name: jaeger-collector-proxy
+  spec:
+    replicas: 1
+    selector:
+      name: jaeger-collector-proxy
+    strategy:
+      resources: {}
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          app: jaeger-collector-proxy
+          name: jaeger-collector-proxy
+        name: jaeger-collector-proxy
+      spec:
+        containers:
+        - image: ' '
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            timeoutSeconds: 3
+          name: jaeger-collector-proxy
+          ports:
+          - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 3
+            timeoutSeconds: 3
+          resources:
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name:  auth
+              mountPath: /opt/app-root/auth/
+        volumes:
+        - name: auth
+          secret:
+            secretName: jaeger-collector-proxy-auth
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - jaeger-collector-proxy
+        from:
+          kind: ImageStreamTag
+          name: jaeger-collector-proxy:latest
+      type: ImageChange
+    - type: ConfigChange
+parameters:
+- description: Github trigger secret.  A difficult to guess string encoded as part
+    of the webhook URL.  Not encrypted.
+  displayName: GitHub Webhook Secret
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: GITHUB_WEBHOOK_SECRET
+- description: A secret string used to configure the Generic webhook.
+  displayName: Generic Webhook Secret
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: GENERIC_WEBHOOK_SECRET
